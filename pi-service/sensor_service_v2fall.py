@@ -603,43 +603,51 @@ class SimpleCameraAI:
                 distance_info = "\n\nULTRASONIC SENSOR DATA:\n- No reliable distance reading available"
 
             # Visual-first analysis prompt with distance as confirmation
-            prompt = f"""You are an AI assistant helping a blind person navigate safely. 
+            
+            prompt = f"""You are an AI assistant guiding a blind person as they walk. Your goal is to provide **short, clear, human-style verbal directions** based on the first-person camera view and proximity sensor data.
 
-Analyze this first-person camera view and identify any immediate hazards or navigation information.
+Start by analyzing the **camera view** for any immediate obstacles, changes in terrain, or nearby people. Then use the **distance sensor** ONLY to enhance or confirm risks.
+
 {distance_info}
 
-**ANALYSIS PRIORITY:**
-1. **PRIMARY**: Analyze the camera image for visual hazards and describe in a concise way what you see(stairs, walls, people, etc...). dont mention the color as we are trying to help blind persons.
-2. **SECONDARY**: Use distance sensor data ONLY to confirm or enhance visually detected hazards
+🧠 **ANALYSIS PRIORITY:**
+1. Focus FIRST on visual input — describe any immediate obstacles, stairs, drop-offs, walls, people, etc. Dont use vague terms like 'obstacle ahead'. 
+2. Use the distance sensor ONLY if:
+   - There's a visible hazard (give the distance)
+   - Distance is <30cm but the camera sees nothing (potential invisible obstacle like glass or pole)
 
-**DISTANCE SENSOR RULES:**
-- If visual path is CLEAR: Ignore distance readings >50cm (don't mention distant walls/objects)
-- If visual HAZARD detected: Use distance to provide precise measurements
-- If distance <30cm but no visual hazard: Mention potential obstacle (glass, thin pole, etc.)
+🧭 **INSTRUCTION STYLE:**
+- Be **natural, friendly, and directive** — like a sighted guide helping someone walk.
+- Avoid words like “identify,” “investigate,” or “analyze”
+- Say things like: “Watch out,” “Slow down,” “Turn slightly left,” “Clear ahead,” etc.
+- Keep responses short and under 20 words for text-to-speech
 
-Respond with JSON only in this EXACT format:
+📏 **DISTANCE RULES:**
+- Ignore any distance >50cm unless it confirms a clear visual hazard
+- If distance <30cm and camera sees nothing, mention a **possible** close obstacle
+- Never mention raw distance unless it makes the message clearer or safer
+
+🔁 **JSON RESPONSE FORMAT:**
+Respond only in this exact format:
+
 {{
-  "type": "danger|warning|neutral",
-  "message": "Clear, direct message for text-to-speech (under 20 words)"
+  "type": "danger" | "warning" | "neutral",
+  "message": "Concise voice message under 20 words"
 }}
 
-**RESPONSE GUIDELINES:**
-- **danger**: Immediate visual threats OR distance <30cm with potential collision risk
-- **warning**: Visual hazards ahead OR approaching people/stairs
-- **neutral**: Clear visual path (ignore distant objects >50cm)
+📌 **EXAMPLES:**
+- Wall ahead in view:       {{"type": "danger", "message": "Wall ahead, stop now"}}
+- chair ahead in view:       {{"type": "danger", "message": "chair ahead, stop now and turn left"}}
+- Clear visually:           {{"type": "neutral", "message": "Path clear ahead"}}
+- Stairs detected:          {{"type": "warning", "message": "Stairs going down, walk carefully"}}
+- Nothing in view, but <15cm:  {{"type": "warning", "message": "Possible object close ahead, move slowly"}}
 
-**EXAMPLES:**
-- Visual wall + close distance: {{"type": "danger", "message": "Wall directly ahead at 25 centimeters, stop"}}
-- Visual clear + distant object: {{"type": "neutral", "message": "Path clear ahead"}}
-- Visual stairs: {{"type": "warning", "message": "Stairs going down ahead, slow down"}}
-- No visual hazard + very close reading: {{"type": "warning", "message": "Possible obstacle very close at 15 centimeters"}}
+🔒 **DO NOT SAY**: “Analyzing,” “Object detected,” “Identify,” “Investigate,” “8 centimeters” unless it’s urgent
+🎯 **DO SAY**: What a sighted friend would tell you while walking
+
 
 Focus on what the CAMERA shows first,describe what you see , and use distance sensor only to enhance hazard details."""
-
-            # Create image part
             image_part = types.Part.from_bytes(data=image_data, mime_type='image/jpeg')
-
-            # Make AI request
             response = self.ai_client.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=[prompt, image_part],
