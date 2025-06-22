@@ -606,7 +606,7 @@ class SimpleCameraAI:
             
             prompt = f"""You are an AI assistant guiding a blind person as they walk. Your goal is to provide **short, clear, human-style verbal directions** based on the first-person camera view and proximity sensor data.
 
-Start by analyzing the **camera view** for any immediate obstacles, changes in terrain, or nearby people. Then use the **distance sensor** ONLY to enhance or confirm risks.
+Start by analyzing the **camera view** for any iwhat you see ahead, immediate onstacles,  changes in terrain, or nearby people. Then use the **distance sensor** ONLY to enhance or confirm risks.
 
 {distance_info}
 
@@ -621,6 +621,7 @@ Start by analyzing the **camera view** for any immediate obstacles, changes in t
 - Avoid words like “identify,” “investigate,” or “analyze”
 - Say things like: “Watch out,” “Slow down,” “Turn slightly left,” “Clear ahead,” etc.
 - Keep responses short and under 20 words for text-to-speech
+- put it under the danger category only if the obstacle is directly ahead, otherwise put it under the warning category like - I see a person walking directly towards you, or a person is standing at a close distance ahead of you.
 
 📏 **DISTANCE RULES:**
 - Ignore any distance >50cm unless it confirms a clear visual hazard
