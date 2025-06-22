@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# !/usr/bin/env python3
 """
 Simple SentientSight Camera AI Service with TTS and Convex Integration
 Camera → AI inference → Convex storage → TTS alerts
@@ -34,6 +34,8 @@ except ImportError:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+from fastapi.responses import StreamingResponse
+import cv2
 
 # HTTP client for TTS and Convex
 import aiohttp
@@ -87,7 +89,7 @@ except ImportError:
 # Configuration
 API_HOST = "0.0.0.0"
 API_PORT = 8000
-AI_ANALYSIS_INTERVAL = 3.0  # Analyze every 3 seconds
+AI_ANALYSIS_INTERVAL = 1.5  # Analyze every 1.5 seconds for faster response
 
 # AI Configuration
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
@@ -391,6 +393,40 @@ class SimpleCameraAI:
             print(f"⚠️ Camera capture error: {e}")
             return None
 
+    def get_camera_frame(self) -> bytes:
+        """Get a single camera frame for streaming"""
+        if not self.camera:
+            # Return a black frame for testing without camera
+            import numpy as np
+            black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            _, buffer = cv2.imencode('.jpg', black_frame)
+            return buffer.tobytes()
+
+        try:
+            stream = io.BytesIO()
+            self.camera.capture_file(stream, format='jpeg')
+            stream.seek(0)
+            return stream.getvalue()
+        except Exception as e:
+            print(f"⚠️ Camera frame error: {e}")
+            # Return a black frame on error
+            import numpy as np
+            black_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            _, buffer = cv2.imencode('.jpg', black_frame)
+            return buffer.tobytes()
+
+    async def generate_camera_stream(self):
+        """Generate continuous camera stream for video feed"""
+        while True:
+            try:
+                frame = self.get_camera_frame()
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                await asyncio.sleep(0.033)  # ~30 FPS (1/30 = 0.033)
+            except Exception as e:
+                print(f"⚠️ Camera stream error: {e}")
+                await asyncio.sleep(0.1)
+
     async def analyze_with_ai(self, image_data: bytes) -> dict:
         """AI analysis with TTS-first priority, then fire-and-forget Convex operations"""
         if not self.ai_enabled or not self.ai_client:
@@ -671,12 +707,13 @@ Focus on what the CAMERA shows first,describe what you see , and use distance se
                         self.last_ai_analysis = current_time
                         self.analysis_count += 1
 
-                        # PRIORITY 1: Trigger TTS for hazards IMMEDIATELY
+                        # PRIORITY 1: Trigger TTS for hazards IMMEDIATELY (FIRE-AND-FORGET)
                         if self.should_speak_result(ai_result):
                             message = ai_result.get('message', 'Hazard detected')
                             urgency = ai_result.get('type', 'medium')
-                            print(f"🔊 PRIORITY: Speaking hazard alert immediately")
-                            await self.speak_message(message, urgency)
+                            print(f"🔊 PRIORITY: Speaking hazard alert immediately (non-blocking)")
+                            # Fire-and-forget TTS - don't await!
+                            asyncio.create_task(self.speak_message(message, urgency))
 
                         # Log result (Convex operations already queued in background)
                         urgency_icon = {"danger": "🚨", "warning": "⚠️", "neutral": "✅"}.get(
@@ -797,6 +834,8 @@ async def root():
             "test_analysis": "/test",
             "test_tts": "/test-tts",
             "test_convex": "/test-convex",
+            "camera_feed": "/camera_feed",
+            "camera_frame": "/camera_frame",
             "tts_settings": "/tts",
             "distance": "/distance",
             "health": "/health"
@@ -930,6 +969,31 @@ async def test_convex():
         }
     except Exception as e:
         return {"error": f"Convex test failed: {e}"}
+
+
+@app.get("/camera_feed")
+async def camera_feed():
+    """Live camera feed for frontend video display"""
+    if not service.camera and not CAMERA_AVAILABLE:
+        return {"error": "Camera not available"}
+
+    return StreamingResponse(
+        service.generate_camera_stream(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+@app.get("/camera_frame")
+async def get_single_frame():
+    """Get a single camera frame (for testing)"""
+    try:
+        frame_data = service.get_camera_frame()
+        return StreamingResponse(
+            io.BytesIO(frame_data),
+            media_type="image/jpeg"
+        )
+    except Exception as e:
+        return {"error": f"Failed to get frame: {e}"}
 
 
 @app.get("/tts")
