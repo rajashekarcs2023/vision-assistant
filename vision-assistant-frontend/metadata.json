@@ -1,0 +1,8 @@
+{
+  "name": "Blind Vision Assistant",
+  "description": "A web application that uses the webcam and Gemini API to detect specific events (e.g., a raised arm) and provides audio feedback. This aims to demonstrate a concept for a visual assistance tool.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "prompt": ""
+}
