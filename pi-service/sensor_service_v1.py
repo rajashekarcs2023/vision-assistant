@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# !/usr/bin/env python3
 """
 Simple SentientSight Camera AI Service with TTS and Convex Integration
 Camera → AI inference → Convex storage → TTS alerts
@@ -276,7 +276,7 @@ class SimpleCameraAI:
         except Exception as e:
             print(f"❌ Convex alert storage error: {e}")
 
-    async def _store_alert_async(self, alert_type: str, message: str, image_id: str = None):
+    async def _store_alert_async(self, self, alert_type: str, message: str, image_id: str = None):
         """Internal async method to store alert in Convex"""
         try:
             # Prepare alert data
@@ -392,7 +392,7 @@ class SimpleCameraAI:
             return None
 
     async def analyze_with_ai(self, image_data: bytes) -> dict:
-        """AI analysis with simplified structured output and Convex integration"""
+        """AI analysis with TTS priority - speak first, then store in background"""
         if not self.ai_enabled or not self.ai_client:
             return {
                 "type": "neutral",
@@ -408,11 +408,6 @@ class SimpleCameraAI:
             }
 
         try:
-            # Upload image to Convex first (if enabled)
-            image_id = None
-            if self.convex_enabled and image_data != b"no_camera_data":
-                image_id = await self.upload_image_to_convex(image_data)
-
             # Get current distance reading
             current_distance = self.get_averaged_distance()
             distance_info = ""
@@ -472,7 +467,7 @@ Focus on what the CAMERA shows first,describe what you see , and use distance se
 
             # Parse response
             json_str = response.text.strip()
-            if json_str.startswith('```'):
+            if json_str.startswith('\`\`\`'):
                 lines = json_str.split('\n')
                 json_str = '\n'.join(lines[1:-1])
 
@@ -492,23 +487,13 @@ Focus on what the CAMERA shows first,describe what you see , and use distance se
             ai_result['timestamp'] = time.time()
             ai_result['analysis_id'] = self.analysis_count
             ai_result['sensor_distance_cm'] = current_distance
-            ai_result['image_id'] = image_id
 
-            # Store alert in Convex (non-blocking) - only for hazards
-            if ai_result["type"] in ["danger", "warning"]:
-                await self.store_alert_in_convex(
-                    alert_type=ai_result["type"],
-                    message=ai_result["message"],
-                    image_id=image_id
-                )
-
-            # Log with distance info
+            # Log result immediately
             distance_log = f" (📏 {current_distance}cm)" if current_distance else " (📏 no distance)"
-            convex_log = f" (📦 {image_id})" if image_id else " (📦 no upload)"
             type_emoji = {"danger": "🚨", "warning": "⚠️", "neutral": "✅"}
             emoji = type_emoji.get(ai_result["type"], "ℹ️")
             print(
-                f"🧠 AI Result #{self.analysis_count}: {emoji} {ai_result['type'].upper()} - {ai_result['message']}{distance_log}{convex_log}")
+                f"🧠 AI Result #{self.analysis_count}: {emoji} {ai_result['type'].upper()} - {ai_result['message']}{distance_log}")
 
             return ai_result
 
@@ -618,8 +603,8 @@ Focus on what the CAMERA shows first,describe what you see , and use distance se
         return False
 
     async def run_continuous_analysis(self):
-        """Continuously capture and analyze images"""
-        print("🔄 Starting continuous AI analysis with Convex integration...")
+        """Continuously capture and analyze images - TTS first, then background storage"""
+        print("🔄 Starting continuous AI analysis with TTS priority...")
 
         while self.running:
             try:
@@ -633,7 +618,7 @@ Focus on what the CAMERA shows first,describe what you see , and use distance se
                     image_data = self.capture_image()
 
                     if image_data:
-                        # Analyze with AI (includes Convex upload and storage)
+                        # Analyze with AI (fast, no Convex operations yet)
                         print(f"🧠 Analyzing with AI...")
                         ai_result = await self.analyze_with_ai(image_data)
 
@@ -642,56 +627,102 @@ Focus on what the CAMERA shows first,describe what you see , and use distance se
                         self.last_ai_analysis = current_time
                         self.analysis_count += 1
 
-                        # Log result
-                        urgency_icon = {"danger": "🚨", "warning": "⚠️", "neutral": "✅"}.get(
-                            ai_result.get('type', 'neutral'), "⚪")
-                        print(
-                            f"{urgency_icon} Analysis #{self.analysis_count}: {ai_result.get('type').upper()} - '{ai_result.get('message')}'")
-
-                        # Trigger TTS for hazards
+                        # 🔊 PRIORITY: Trigger TTS IMMEDIATELY for hazards
+                        tts_spoken = False
                         if self.should_speak_result(ai_result):
                             message = ai_result.get('message', 'Hazard detected')
                             urgency = ai_result.get('type', 'medium')
+                            print(f"🔊 PRIORITY TTS: Speaking immediately...")
                             await self.speak_message(message, urgency)
+                            tts_spoken = True
 
-                await asyncio.sleep(0.5)  # Small sleep to prevent busy waiting
+                        # 📦 BACKGROUND: Fire-and-forget Convex operations (non-blocking)
+                        if self.convex_enabled and image_data != b"no_camera_data":
+                            print(f"📦 Background: Starting Convex operations...")
+                            asyncio.create_task(self._handle_convex_storage_async(
+                                image_data, ai_result, tts_spoken
+                            ))
 
-            except Exception as e:
-                print(f"⚠️ Analysis loop error: {e}")
-                await asyncio.sleep(1)
+                        # Log completion
+                        urgency_icon = {"danger": "🚨", "warning": "⚠️", "neutral": "✅"}.get(
+                            ai_result.get('type', 'neutral'), "⚪")
+                        tts_status = " (🔊 SPOKEN)" if tts_spoken else ""
+                        convex_status = " (📦 STORING...)" if self.convex_enabled else ""
+                        print(
+                            f"{urgency_icon} Analysis #{self.analysis_count} COMPLETE: {ai_result.get('type').upper()}{tts_status}{convex_status}")
 
-    async def cleanup(self):
-        """Clean up resources with proper HTTP session closure"""
-        print("🧹 Cleaning up...")
-        self.running = False
+            await asyncio.sleep(0.5)  # Small sleep to prevent busy waiting
 
-        # Close camera
-        if self.camera:
-            try:
-                self.camera.stop()
-                self.camera.close()
-                self.camera = None
-                print("📷 Camera closed")
-            except Exception as e:
-                print(f"⚠️ Camera cleanup error: {e}")
+        except Exception as e:
+        print(f"⚠️ Analysis loop error: {e}")
+        await asyncio.sleep(1)
 
-        # Cleanup GPIO
-        if self.ultrasonic_enabled and GPIO_AVAILABLE:
-            try:
-                GPIO.cleanup()
-                print("📏 GPIO cleaned up")
-            except Exception as e:
-                print(f"⚠️ GPIO cleanup error: {e}")
 
-        # Close HTTP session for TTS
-        if self.http_session:
-            try:
-                await self.http_session.close()
-                print("🌐 HTTP session closed")
-            except Exception as e:
-                print(f"⚠️ HTTP session cleanup error: {e}")
+async def cleanup(self):
+    """Clean up resources with proper HTTP session closure"""
+    print("🧹 Cleaning up...")
+    self.running = False
 
-        print("✅ Cleanup complete")
+    # Close camera
+    if self.camera:
+        try:
+            self.camera.stop()
+            self.camera.close()
+            self.camera = None
+            print("📷 Camera closed")
+        except Exception as e:
+            print(f"⚠️ Camera cleanup error: {e}")
+
+    # Cleanup GPIO
+    if self.ultrasonic_enabled and GPIO_AVAILABLE:
+        try:
+            GPIO.cleanup()
+            print("📏 GPIO cleaned up")
+        except Exception as e:
+            print(f"⚠️ GPIO cleanup error: {e}")
+
+    # Close HTTP session for TTS
+    if self.http_session:
+        try:
+            await self.http_session.close()
+            print("🌐 HTTP session closed")
+        except Exception as e:
+            print(f"⚠️ HTTP session cleanup error: {e}")
+
+    print("✅ Cleanup complete")
+
+
+async def _handle_convex_storage_async(self, image_data: bytes, ai_result: dict, tts_spoken: bool):
+    """Handle Convex storage operations in background (fire-and-forget)"""
+    try:
+        print(f"📦 Background storage starting for analysis #{ai_result.get('analysis_id', 'unknown')}...")
+
+        # Upload image to Convex (background)
+        image_id = None
+        if image_data and image_data != b"no_camera_data":
+            image_id = await self.upload_image_to_convex(image_data)
+            if image_id:
+                print(f"📦 Image uploaded: {image_id}")
+            else:
+                print(f"⚠️ Image upload failed")
+
+        # Store alert in Convex (background) - only for hazards
+        if ai_result.get("type") in ["danger", "warning"]:
+            await self._store_alert_async(
+                alert_type=ai_result.get("type"),
+                message=ai_result.get("message"),
+                image_id=image_id
+            )
+            print(f"📦 Alert stored for: {ai_result.get('type')} - {ai_result.get('message')}")
+
+        # Update the result with image_id for API responses
+        if image_id:
+            ai_result['image_id'] = image_id
+
+        print(f"📦 Background storage completed for analysis #{ai_result.get('analysis_id', 'unknown')}")
+
+    except Exception as e:
+        print(f"❌ Background Convex storage error: {e}")
 
 
 # Initialize service
