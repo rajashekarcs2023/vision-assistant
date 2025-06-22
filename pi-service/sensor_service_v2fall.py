@@ -136,7 +136,7 @@ REG_DATA = 0x32      # First of 6 data registers (X0, X1, Y0, Y1, Z0, Z1)
 SCALE_G = 0.0039     # 4 mg/LSB in full-resolution ±2 g mode
 
 # Fall Detection Configuration
-FALL_G_FORCE_THRESHOLD = 2.5  # G-force threshold for fall detection
+FALL_G_FORCE_THRESHOLD = 1.5  # G-force threshold for fall detection
 FALL_DEBOUNCE_SECONDS = 30    # Minimum time between fall detections
 
 # Ultrasonic Sensor Configuration (HC-SR04)
@@ -612,7 +612,7 @@ Start by analyzing the **camera view** for any iwhat you see ahead, immediate on
 
 🧠 **ANALYSIS PRIORITY:**
 1. Focus FIRST on visual input — describe any immediate obstacles, stairs, drop-offs, walls, people, etc. Dont use vague terms like 'obstacle ahead'. 
-2. Use the distance sensor ONLY if:
+2. Then mention the approximate distance to what you see:
    - There's a visible hazard (give the distance)
    - Distance is <30cm but the camera sees nothing (potential invisible obstacle like glass or pole)
 

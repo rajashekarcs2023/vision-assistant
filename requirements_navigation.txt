@@ -1,0 +1,18 @@
+# Indoor Navigation Demo Dependencies
+
+# LiveKit for voice interaction
+livekit-agents
+livekit-plugins-openai
+livekit-plugins-silero
+
+# Image processing and AI
+sentence-transformers
+pillow
+numpy
+openai
+
+# Utilities
+requests
+python-dotenv
+flask
+flask-cors
