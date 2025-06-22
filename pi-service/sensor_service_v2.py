@@ -276,7 +276,7 @@ class SimpleCameraAI:
         except Exception as e:
             print(f"❌ Convex alert storage error: {e}")
 
-    async def _store_alert_async(self, alert_type: str, message: str, image_id: str = None):
+    async def _store_alert_async(self, self, alert_type: str, message: str, image_id: str = None):
         """Internal async method to store alert in Convex"""
         try:
             # Prepare alert data
@@ -392,7 +392,7 @@ class SimpleCameraAI:
             return None
 
     async def analyze_with_ai(self, image_data: bytes) -> dict:
-        """AI analysis with simplified structured output and Convex integration"""
+        """AI analysis with TTS-first priority, then fire-and-forget Convex operations"""
         if not self.ai_enabled or not self.ai_client:
             return {
                 "type": "neutral",
@@ -408,11 +408,6 @@ class SimpleCameraAI:
             }
 
         try:
-            # Upload image to Convex first (if enabled)
-            image_id = None
-            if self.convex_enabled and image_data != b"no_camera_data":
-                image_id = await self.upload_image_to_convex(image_data)
-
             # Get current distance reading
             current_distance = self.get_averaged_distance()
             distance_info = ""
@@ -472,7 +467,7 @@ Focus on what the CAMERA shows first,describe what you see , and use distance se
 
             # Parse response
             json_str = response.text.strip()
-            if json_str.startswith('```'):
+            if json_str.startswith('\`\`\`'):
                 lines = json_str.split('\n')
                 json_str = '\n'.join(lines[1:-1])
 
@@ -492,23 +487,23 @@ Focus on what the CAMERA shows first,describe what you see , and use distance se
             ai_result['timestamp'] = time.time()
             ai_result['analysis_id'] = self.analysis_count
             ai_result['sensor_distance_cm'] = current_distance
-            ai_result['image_id'] = image_id
 
-            # Store alert in Convex (non-blocking) - only for hazards
-            if ai_result["type"] in ["danger", "warning"]:
-                await self.store_alert_in_convex(
-                    alert_type=ai_result["type"],
-                    message=ai_result["message"],
-                    image_id=image_id
-                )
-
-            # Log with distance info
+            # Log result BEFORE Convex operations
             distance_log = f" (📏 {current_distance}cm)" if current_distance else " (📏 no distance)"
-            convex_log = f" (📦 {image_id})" if image_id else " (📦 no upload)"
             type_emoji = {"danger": "🚨", "warning": "⚠️", "neutral": "✅"}
             emoji = type_emoji.get(ai_result["type"], "ℹ️")
             print(
-                f"🧠 AI Result #{self.analysis_count}: {emoji} {ai_result['type'].upper()} - {ai_result['message']}{distance_log}{convex_log}")
+                f"🧠 AI Result #{self.analysis_count}: {emoji} {ai_result['type'].upper()} - {ai_result['message']}{distance_log}")
+
+            # FIRE-AND-FORGET: Upload image and store alert in background (AFTER TTS will happen)
+            if ai_result["type"] in ["danger", "warning"] and self.convex_enabled:
+                # Start background task for Convex operations - don't await!
+                asyncio.create_task(self._handle_convex_storage_async(image_data, ai_result))
+                print(f"📦 Convex storage queued for background processing")
+            elif self.convex_enabled and image_data != b"no_camera_data":
+                # Even for neutral results, still upload image for analysis history
+                asyncio.create_task(self._upload_image_only_async(image_data))
+                print(f"📦 Image upload queued for background processing")
 
             return ai_result
 
@@ -520,6 +515,40 @@ Focus on what the CAMERA shows first,describe what you see , and use distance se
                 "error": str(e),
                 "sensor_distance_cm": self.last_distance
             }
+
+    async def _handle_convex_storage_async(self, image_data: bytes, ai_result: dict):
+        """Background task: Upload image and store alert (fire-and-forget)"""
+        try:
+            print("📦 Background: Starting Convex storage operations...")
+
+            # Upload image first
+            image_id = await self.upload_image_to_convex(image_data)
+
+            if image_id:
+                ai_result['image_id'] = image_id
+                print(f"📦 Background: Image uploaded - {image_id}")
+
+            # Store alert with image reference
+            await self._store_alert_async(
+                alert_type=ai_result["type"],
+                message=ai_result["message"],
+                image_id=image_id
+            )
+
+            print(f"📦 Background: Convex storage completed for {ai_result['type']} alert")
+
+        except Exception as e:
+            print(f"❌ Background Convex storage error: {e}")
+
+    async def _upload_image_only_async(self, image_data: bytes):
+        """Background task: Upload image only (for neutral results)"""
+        try:
+            print("📦 Background: Uploading image for analysis history...")
+            image_id = await self.upload_image_to_convex(image_data)
+            if image_id:
+                print(f"📦 Background: Image uploaded - {image_id}")
+        except Exception as e:
+            print(f"❌ Background image upload error: {e}")
 
     async def speak_message(self, message: str, urgency: str = "medium"):
         """Convert text to speech using LiveKit TTS with direct audio playback"""
@@ -633,7 +662,7 @@ Focus on what the CAMERA shows first,describe what you see , and use distance se
                     image_data = self.capture_image()
 
                     if image_data:
-                        # Analyze with AI (includes Convex upload and storage)
+                        # Analyze with AI (now returns immediately, Convex ops happen in background)
                         print(f"🧠 Analyzing with AI...")
                         ai_result = await self.analyze_with_ai(image_data)
 
@@ -642,17 +671,18 @@ Focus on what the CAMERA shows first,describe what you see , and use distance se
                         self.last_ai_analysis = current_time
                         self.analysis_count += 1
 
-                        # Log result
-                        urgency_icon = {"danger": "🚨", "warning": "⚠️", "neutral": "✅"}.get(
-                            ai_result.get('type', 'neutral'), "⚪")
-                        print(
-                            f"{urgency_icon} Analysis #{self.analysis_count}: {ai_result.get('type').upper()} - '{ai_result.get('message')}'")
-
-                        # Trigger TTS for hazards
+                        # PRIORITY 1: Trigger TTS for hazards IMMEDIATELY
                         if self.should_speak_result(ai_result):
                             message = ai_result.get('message', 'Hazard detected')
                             urgency = ai_result.get('type', 'medium')
+                            print(f"🔊 PRIORITY: Speaking hazard alert immediately")
                             await self.speak_message(message, urgency)
+
+                        # Log result (Convex operations already queued in background)
+                        urgency_icon = {"danger": "🚨", "warning": "⚠️", "neutral": "✅"}.get(
+                            ai_result.get('type', 'neutral'), "⚪")
+                        print(
+                            f"{urgency_icon} Analysis #{self.analysis_count} complete: {ai_result.get('type').upper()} - '{ai_result.get('message')}'")
 
                 await asyncio.sleep(0.5)  # Small sleep to prevent busy waiting
 
